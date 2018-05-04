@@ -12,19 +12,22 @@ script_name = os.path.basename(argv.pop(0))
 help_message = '''
 
 Example:
-        {script} cases.project.project_id=TCGA-BRCA data_category=Clinical
+
+{script} cases.project.project_id=TCGA-BRCA data_category=Clinical
         
     -h | help
-    -d | download files to computer
+    -d | download files to computer (as opposed to just printing metadata)
+    -o | output directory (only necessary with '-d')
     -p | print available fields (i.e. 'cases.project.project_id')
 
 
-
-
 For more fields, visit:
-        {site}
-            or run: 
-                {script} -p
+        
+{site}
+
+or run: 
+
+{script} -p
         
         '''.format(site=website, script=script_name)
 
@@ -50,13 +53,20 @@ if argv[0] in ['-p', '--print']:
             print(field)         
     exit(0)
 
-download = None
+download, output_prefix = None, ''
 for argument in argv:
+    if argument =='-o':
+        output_prefix = argv[argv.index('-o') + 1]
+
     if argument == '-d':
         download = True
-        del argv[argv.index('-d')]
 
+if download:
+    del argv[argv.index('-d')]
 
+if output_prefix:
+    del argv[argv.index('-o') + 1]
+    del argv[argv.index('-o')]
 
 import json
 import re
@@ -109,7 +119,7 @@ def build_filters():
         "filters": filters,
         "fields": fields,
         "format": "TSV",
-        "size": 5    # Maximum number of records to return. TODO: Increase when done testing
+        "size": 5000    # Maximum number of records to return.
         }
 
     # The parameters are passed to 'json'
@@ -127,7 +137,7 @@ def download_files(content):
     id_col = header.index('id')  # Get "id" column number
     ids = [i.split('\t')[id_col] for i in content]
 
-    print("Found {number} patient IDs matching your criteria. Downloading...".format(number = len(ids)))
+    print("Found {number} IDs matching your criteria. Downloading...".format(number = len(ids)))
     
     data_endpt = "https://api.gdc.cancer.gov/data"
     params = {"ids": ids}
@@ -139,19 +149,13 @@ def download_files(content):
                                 })
 
     # Get name of tar
-    response_head_cd = response.headers["Content-Disposition"]  
-    tar_file_name = re.findall("filename=(.+)", response_head_cd)[0]
-
+    print(response)
+    #response_head_cd = response.headers["Content-Disposition"]  
+    #tar_file_name = re.findall("filename=(.+)", response_head_cd)[0]
+    #tar_file_name = os.path.join(output_prefix, "dl.tar.gz")
+    tar_file_name = output_prefix +'.tar.gz'
     with open(tar_file_name, "wb") as output_file:
         output_file.write(response.content)
-    
-    return tar_file_name
-
-content = build_filters()
-
-if download:
-    tar_file_name = download_files(content)
-
 
     output_dir = tar_file_name.replace('.tar.gz','')
     os.mkdir(output_dir)
@@ -174,3 +178,13 @@ if download:
                 outfile.write(file_content)
         os.remove(gz_file)
 
+
+    
+
+content = build_filters()
+
+if download:
+    download_files(content)
+
+
+    
