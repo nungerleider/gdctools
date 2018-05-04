@@ -4,35 +4,40 @@
 from sys import argv, exit
 import os
 
+
 website = "https://docs.gdc.cancer.gov/API/Users_Guide/Appendix_A_Available_Fields/"
 script_name = os.path.basename(argv.pop(0))
+
 
 help_message = '''
 
 Example:
         {script} cases.project.project_id=TCGA-BRCA data_category=Clinical
         
+    -h | help
+    -d | download files to computer
+    -p | print available fields (i.e. 'cases.project.project_id')
+
+
+
+
 For more fields, visit:
         {site}
-
-Or run: 
-        {script} -p
+            or run: 
+                {script} -p
         
         '''.format(site=website, script=script_name)
 
-# Fieldname=Values (if more than one, comma separate)
+
+# FieldName=Values (if more than one, separate by commas)
 if not argv or argv[0] in ['-h', '--help']:
     print(help_message)
     exit(0)
 
+
 import requests
-import json
-import re
-import tarfile
-import glob
 from lxml import html
-from shutil import rmtree
-import gzip
+
 
 # Scrape then print "Available Fields" from GDC website
 if argv[0] in ['-p', '--print']:
@@ -45,92 +50,127 @@ if argv[0] in ['-p', '--print']:
             print(field)         
     exit(0)
 
-# Initialize filter dictionary for request
-filters = {
-    "op": "and",
-    "content": []
-}
-
-# Add command line field->value pairs to filters dict
-while len(argv) > 0:
-    field, values = argv.pop().split('=')
-    print(field, values)
-    if ',' in values:
-        values = values.split(',')
-    else:
-        values = [values]
-    new_field = {
-        "op": "in",
-        "content": {"field":field, "value":values}
-    }
-    filters['content'].append(new_field)
-
-# TODO: Save response as metadata
-# List of fields to be returned by response
-fields = [
-    "file_name",
-    "id",
-    "cases.submitter_id",
-    "cases.samples.sample_type",
-    "cases.disease_type",
-    "cases.project.project_id"
-  ]
-
-fields = ",".join(fields)
-
-files_endpt = "https://api.gdc.cancer.gov/files"
+download = None
+for argument in argv:
+    if argument == '-d':
+        download = True
+        del argv[argv.index('-d')]
 
 
-# A POST is used, so the filter parameters can be passed directly as a Dict object.
-params = {
-    "filters": filters,
-    "fields": fields,
-    "format": "TSV",
-    "size": 5    # Maximum number of records to return. TODO: Increase when done testing
+
+import json
+import re
+import tarfile
+import glob
+from shutil import rmtree
+import gzip
+
+def build_filters():
+        
+
+
+    # Initialize filter dictionary for request
+    filters = {
+        "op": "and",
+        "content": []
     }
 
-# The parameters are passed to 'json'
-response = requests.post(files_endpt, headers = {"Content-Type": "application/json"}, json = params)
-content = response.content.decode("utf-8").splitlines()
+    # Add command line field->value pairs to filters dict
+    while len(argv) > 0:
+        field, values = argv.pop().split('=')
+        if ',' in values:
+            values = values.split(',')
+        else:
+            values = [values]
+        new_field = {
+            "op": "in",
+            "content": {"field":field, "value":values}
+        }
+        filters['content'].append(new_field)
 
-# Download files using ids contained in content
-header = content.pop(0).split()
-id_col = header.index('id')  # Get "id" column number
-ids = [i.split('\t')[id_col] for i in content]  
+    # TODO: Save response as metadata
+    # List of fields to be returned by response
+    fields = [
+        "file_name",
+        "id",
+        "cases.submitter_id",
+        "cases.samples.sample_type",
+        "cases.disease_type",
+        "cases.project.project_id"
+    ]
 
-data_endpt = "https://api.gdc.cancer.gov/data"
-params = {"ids": ids}
+    fields = ",".join(fields)
 
-response = requests.post(data_endpt,
-                        data = json.dumps(params),
-                        headers={
-                            "Content-Type": "application/json"
-                            })
+    files_endpt = "https://api.gdc.cancer.gov/files"
 
-# Get name of tar
-response_head_cd = response.headers["Content-Disposition"]  
-tar_file_name = re.findall("filename=(.+)", response_head_cd)[0]
 
-with open(tar_file_name, "wb") as output_file:
-    output_file.write(response.content)
+    # A POST is used, so the filter parameters can be passed directly as a Dict object.
+    params = {
+        "filters": filters,
+        "fields": fields,
+        "format": "TSV",
+        "size": 5    # Maximum number of records to return. TODO: Increase when done testing
+        }
 
-output_dir = tar_file_name.replace('.tar.gz','')
-os.mkdir(output_dir)
+    # The parameters are passed to 'json'
+    response = requests.post(files_endpt, headers = {"Content-Type": "application/json"}, json = params)
+    content = response.content.decode("utf-8").splitlines()
+    for line in content:
+        print(line)
+    return content
 
-tar = tarfile.open(tar_file_name)
 
-tar.extractall(output_dir)
+def download_files(content):
 
-for i in glob.glob(output_dir+'/*/*'):
-    print(os.path.dirname(i))
+    # Download files using ids contained in content
+    header = content.pop(0).split()
+    id_col = header.index('id')  # Get "id" column number
+    ids = [i.split('\t')[id_col] for i in content]
+
+    print("Found {number} patient IDs matching your criteria. Downloading...".format(number = len(ids)))
     
-    os.rename(i, output_dir+'/'+i.split('/')[-1])
-    os.rmdir(os.path.dirname(i))
+    data_endpt = "https://api.gdc.cancer.gov/data"
+    params = {"ids": ids}
 
-for gz_file in glob.glob(output_dir + '/*gz'):
-    with gzip.open(gz_file) as handle:
-        file_content = handle.read()
-        with open(gz_file.replace('.gz', ''), 'wb') as outfile:
-            outfile.write(file_content)
-    os.remove(gz_file)
+    response = requests.post(data_endpt,
+                            data = json.dumps(params),
+                            headers={
+                                "Content-Type": "application/json"
+                                })
+
+    # Get name of tar
+    response_head_cd = response.headers["Content-Disposition"]  
+    tar_file_name = re.findall("filename=(.+)", response_head_cd)[0]
+
+    with open(tar_file_name, "wb") as output_file:
+        output_file.write(response.content)
+    
+    return tar_file_name
+
+content = build_filters()
+
+if download:
+    tar_file_name = download_files(content)
+
+
+    output_dir = tar_file_name.replace('.tar.gz','')
+    os.mkdir(output_dir)
+
+    tar = tarfile.open(tar_file_name)
+
+    tar.extractall(output_dir)
+    os.remove(tar_file_name)
+
+    for i in glob.glob(output_dir + '/*/*'):
+        print(os.path.dirname(i))
+        dirname, filename = os.path.split(i)
+        os.rename(i, os.path.join(output_dir, filename))
+        os.rmdir(os.path.dirname(i))
+
+    for gz_file in glob.glob(output_dir + '/*gz'):
+        with gzip.open(gz_file) as handle:
+            file_content = handle.read()
+            with open(gz_file.replace('.gz', ''), 'wb') as outfile:
+                outfile.write(file_content)
+        os.remove(gz_file)
 
